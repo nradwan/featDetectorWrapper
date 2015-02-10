@@ -1,0 +1,7 @@
+int32 command
+int32 OVERFEAT_SUBSCRIBE = 10
+int32 OVERFEAT_UNSUBSCRIBE = 20
+---
+int32 result
+int32 FAILURE = 0
+int32 SUCCESS = 1

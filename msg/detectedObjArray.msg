@@ -1,0 +1,1 @@
+featDetectorWrapper/detectedObj[] detected_classes

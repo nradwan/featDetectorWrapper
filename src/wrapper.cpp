@@ -1,0 +1,336 @@
+#include "featDetectorWrapper/wrapper.h"
+
+Wrapper::Wrapper(ros::NodeHandle nh):
+				node_handle(nh) {
+	init();				
+}
+
+Wrapper::~Wrapper(){
+
+}
+
+void Wrapper::init(){
+	
+	//initialize the wrapper service topic
+	service_topic = "ObjDetectWrapper";
+	kinect_topic = "/camera/depth_registered/points";
+	table_topic = "TablePlane";
+	scene_topic = "FilteredScene";
+	clusters_topic = "Clusters";
+	detection_topic = "Detection";
+	frame_id = "/camera_depth_optical_frame";
+	obj_detect_topic = "classifyObjs";
+	clustering_tolerance_ = 0.025;
+	cluster_min_size_ =  50;
+  	cluster_max_size_ = 15000;
+  	maximum_obj_size = 100; //(50 cm)
+	
+	//announce the object detection service
+	detect_wrapper_service = node_handle.advertiseService(service_topic, &Wrapper::handleDetectionServiceCall, this);
+	ROS_INFO("Announced service: %s", service_topic.c_str());
+	//announce the table publisher
+	table_pub = node_handle.advertise<sensor_msgs::PointCloud2>(table_topic, 1);
+	ROS_INFO("Table point cloud published on topic: %s", table_topic.c_str());
+	//announce the scene publisher
+	scene_pub = node_handle.advertise<sensor_msgs::PointCloud2>(scene_topic, 1);
+	ROS_INFO("Filtered scene point cloud published on topic: %s", scene_topic.c_str());
+	//announce the clusters publisher
+	clusters_pub = node_handle.advertise<visualization_msgs::MarkerArray>(clusters_topic, 1);
+	ROS_INFO("Clusters published on topic: %s", clusters_topic.c_str());
+	//announce the detection publisher
+	detection_pub = node_handle.advertise<featDetectorWrapper::detectedObjArray>(detection_topic, 1);
+	ROS_INFO("Detected objects published on topic: %s", detection_topic.c_str());
+	//initialize the service client
+	obj_detect_client = node_handle.serviceClient<featDetectorWrapper::classifyObjs>(obj_detect_topic);
+	ROS_INFO("Object detection client created for topic: %s", obj_detect_topic.c_str());
+}
+
+bool Wrapper::handleDetectionServiceCall(featDetectorWrapper::objDetection::Request& req, 
+											featDetectorWrapper::objDetection::Response& res){
+	if(req.command == featDetectorWrapper::objDetection::Request::OBJDET_SUBSCRIBE){
+		//subscribe to kinect
+		subscribeToKinect();
+	}
+	else{
+		if(req.command == featDetectorWrapper::objDetection::Request::OBJDET_UNSUBSCRIBE){
+			//unsubscribe from kinect
+			unsubscribeFromKinect();
+		}
+		else{
+			ROS_ERROR("Cannot recognize command in handleClassificationServiceCall.");
+			res.result = featDetectorWrapper::objDetectionResponse::FAILURE;
+			return false;
+		}
+	}
+	res.result = featDetectorWrapper::objDetectionResponse::SUCCESS;
+	return true;							
+}
+
+void Wrapper::subscribeToKinect(){
+	kinect_subscriber = node_handle.subscribe(kinect_topic, 1, &Wrapper::publishDetection, this);
+	ROS_INFO("Subscribed to: %s", kinect_topic.c_str());
+}
+
+void Wrapper::unsubscribeFromKinect(){
+	kinect_subscriber.shutdown();
+	ROS_WARN("UNsubscribed from: %s", kinect_topic.c_str());
+}
+
+void Wrapper::publishDetection(const sensor_msgs::PointCloud2::ConstPtr &msg){
+	// Segment out the table plane. Return a point cloud of the table and one of the objects.
+	PCLPointCloud::Ptr objs_cloud(new PCLPointCloud);
+	PCLPointCloud::Ptr table_cloud(new PCLPointCloud);
+	filterPointcloud(msg, objs_cloud, table_cloud);
+	if(objs_cloud->points.empty()){
+		std::cout << "no objs. leaving" << std::endl;
+		return;
+	}
+	
+	//publish the table cloud
+	sensor_msgs::PointCloud2 table_cloud_msg;
+	pcl::toROSMsg(*table_cloud, table_cloud_msg);
+	table_pub.publish(table_cloud_msg);
+	
+	//publish the objs cloud
+	sensor_msgs::PointCloud2 objs_cloud_msg;
+	pcl::toROSMsg(*objs_cloud, objs_cloud_msg);
+	scene_pub.publish(objs_cloud_msg);
+	
+	// Cluster the objects in the objs_cloud
+	visualization_msgs::MarkerArray detected_centroids;
+	//Cluster the objects
+	std::vector<pcl::PointIndices> cluster_indices;
+	std::vector<pcl::PointIndices>::const_iterator it;
+	clusterPointcloud(objs_cloud, cluster_indices);
+	std::cout << "found " << cluster_indices.size() << " clusters" << std::endl;
+	std::vector<PCLPointCloud::Ptr> new_clusters; // collect new clusters
+	std::vector<Eigen::Vector3f> new_cluster_centroids; // collect new cluster centroids
+	int id = 0;
+	
+	for (it = cluster_indices.begin(); it != cluster_indices.end(); ++it) {
+		PCLPointCloud::Ptr single_cluster(new PCLPointCloud);
+		single_cluster->width = it->indices.size();
+		single_cluster->height = 1;
+		single_cluster->points.reserve(it->indices.size());
+		std::vector<int>::const_iterator pit;
+		for (pit = it->indices.begin(); pit != it->indices.end(); ++pit) {
+			PCLPoint& pnt = objs_cloud->points[*pit];
+			single_cluster->points.push_back(pnt);
+		}
+    	new_clusters.push_back(single_cluster);
+		// Compute centroid
+ 		Eigen::Vector3f new_centr;
+		computeCentroid(*single_cluster, new_centr);
+		new_cluster_centroids.push_back(new_centr);
+		//add object centroid to marker array
+		visualization_msgs::Marker curr_obj;
+		curr_obj.header.frame_id = frame_id;
+		curr_obj.header.stamp = ros::Time();
+		curr_obj.id = id;
+		curr_obj.type = visualization_msgs::Marker::SPHERE;
+		curr_obj.action = visualization_msgs::Marker::ADD;
+		curr_obj.pose.position.x = new_centr(0);
+		curr_obj.pose.position.y = new_centr(1);
+		curr_obj.pose.position.z = new_centr(2);
+		curr_obj.scale.x = 0.1;
+		curr_obj.scale.y = 0.1;
+		curr_obj.scale.z = 0.1;
+		curr_obj.color.a = 1.0;
+		curr_obj.color.r = 1.0;
+		curr_obj.color.g = 0.0;
+		curr_obj.color.b = 0.0;
+		detected_centroids.markers.push_back(curr_obj);
+		
+		id++;
+	}
+	
+	//publish the clustered objects
+	clusters_pub.publish(detected_centroids);
+	
+	//prepare the clusters for service call
+	std::vector<sensor_msgs::PointCloud2> cluster_clouds;
+	for(std::vector<PCLPointCloud::Ptr>::iterator ix = new_clusters.begin();
+			ix != new_clusters.end(); ++ix){
+		sensor_msgs::PointCloud2 curr_cluster;
+		pcl::toROSMsg(**ix, curr_cluster);
+		cluster_clouds.push_back(curr_cluster);		
+	}
+	//create the service call
+	featDetectorWrapper::classifyObjs srv;
+	srv.request.clusters = cluster_clouds;
+	if(obj_detect_client.call(srv)){
+		ROS_INFO("Object Detection service called");
+		detection_pub.publish(srv.response.detected_classes);
+	}
+	else{
+		ROS_ERROR("Failure to call the object detection service");
+		return;
+	}
+	return;
+}
+
+void Wrapper::filterPointcloud(const sensor_msgs::PointCloud2::ConstPtr& original_pc, PCLPointCloud::Ptr& objects_pointcloud, PCLPointCloud::Ptr& table_pointcloud){
+// Filtering purposes. Remove points with z > max_z
+	double max_z = 0.9 + 0.5;
+	double min_x = 0.01;// Aachen
+	double max_x = 0.65;  
+	double min_y = 0.01;// Aachen
+	double max_y = 1.5;
+	//remove all points with z < table_height
+	double table_height = -0.03; // landmark
+	double plane_thresh = 0.03;
+
+
+	//////////////////////////// Filter to reduce the resolution of the cloud ////////////////////////////
+
+	pcl::PCLPointCloud2 filtered_cloud_msg;
+	pcl::PCLPointCloud2::Ptr n_original_pc(new pcl::PCLPointCloud2());
+	pcl_conversions::toPCL(*original_pc, *n_original_pc);
+	pcl::VoxelGrid<pcl::PCLPointCloud2> sor;
+	sor.setInputCloud(n_original_pc);
+
+	sor.setLeafSize(0.01, 0.01, 0.01);
+	sor.filter(filtered_cloud_msg);
+
+
+
+	//////////////////////////// msg -> pcl ////////////////////////////
+	PCLPointCloud::Ptr scene_pcl(new PCLPointCloud);
+	pcl::fromPCLPointCloud2(filtered_cloud_msg, *scene_pcl);	
+	//cout << "Size before = " << scene_pcl->points.size() << endl;
+
+
+	//////////////////////////// Remove Outliers ////////////////////////////
+	sensor_msgs::PointCloud2::Ptr scene_msg(new sensor_msgs::PointCloud2);
+	pcl::toROSMsg(*scene_pcl, *scene_msg);
+
+
+	pcl::PCLPointCloud2 clean_pcl_msg;
+  	pcl::StatisticalOutlierRemoval<pcl::PCLPointCloud2> outlier_rem;
+	pcl::PCLPointCloud2::Ptr out_rem_pcl(new pcl::PCLPointCloud2());
+	pcl_conversions::toPCL(*scene_msg, *out_rem_pcl);
+	outlier_rem.setInputCloud(out_rem_pcl);
+
+	outlier_rem.setMeanK(50);
+	outlier_rem.setStddevMulThresh(1.0);
+	outlier_rem.filter(clean_pcl_msg);
+
+	pcl::fromPCLPointCloud2(clean_pcl_msg, *scene_pcl);
+
+	//////////////////////////// Filter out far away points ////////////////////////////
+	// TODO Use table plane normal as the z axis and filter out everything below it.
+	PCLPointCloud::Ptr scene_filtered(new PCLPointCloud);
+	pcl::PassThrough<pcl::PointXYZRGB> pass;
+	pass.setInputCloud(boost::make_shared < pcl::PointCloud<pcl::PointXYZRGB> > (*scene_pcl));
+	pass.setFilterFieldName("z");
+	pass.setFilterLimits(table_height, max_z);	
+	//pass.setFilterLimits(-0.2, max_z);
+	pass.filter(*scene_filtered);
+
+//  ROS_WARN("size after z clipping = %u", scene_filtered->points.size());
+	
+  	pass.setInputCloud(boost::make_shared < pcl::PointCloud<pcl::PointXYZRGB> > (*scene_filtered));
+	pass.setFilterFieldName("x");
+	pass.setFilterLimits(min_x, max_x);	
+	pass.filter(*scene_filtered);
+
+//  ROS_WARN("size after x clipping = %u", scene_filtered->points.size());
+
+  	pass.setInputCloud(boost::make_shared < pcl::PointCloud<pcl::PointXYZRGB> > (*scene_filtered));
+	pass.setFilterFieldName("y");
+	pass.setFilterLimits(min_y, max_y);	
+	pass.filter(*scene_filtered);
+
+
+
+//  ROS_WARN("size after y clipping = %u", scene_filtered->points.size());
+
+	if (scene_filtered->empty()) {
+		ROS_WARN("No points left after filtering by distance.");
+		return;
+	}
+
+//	sensor_msgs::PointCloud2 fml;
+//	pcl::toROSMsg(*scene_filtered, fml);
+ // point_cloud_publisher_.publish(fml);
+
+	//////////////////////////// Segment out table plane and extract the objects point cloud ////////////////////////////
+	pcl::ModelCoefficients coefficients;
+	pcl::PointIndices::Ptr inliers(new pcl::PointIndices);
+	// Create the segmentation object
+	pcl::SACSegmentation<pcl::PointXYZRGB> seg;
+	seg.setOptimizeCoefficients(true);
+	seg.setModelType(pcl::SACMODEL_PLANE);
+	seg.setMethodType(pcl::SAC_RANSAC);
+	seg.setDistanceThreshold(plane_thresh);
+	seg.setInputCloud(scene_filtered);
+	seg.segment(*inliers, coefficients);
+
+//  cout << "PLANE: " << coefficients.values[0] << " " << coefficients.values[1] << " " << coefficients.values[2] << " " << coefficients.values[3] << endl;
+
+	pcl::ExtractIndices<pcl::PointXYZRGB> extract;
+	// Extract table
+	extract.setInputCloud(scene_filtered);
+	extract.setIndices(inliers);
+	extract.setNegative(false);
+	table_pointcloud->clear();
+	extract.filter(*table_pointcloud);
+
+	// Extract objects
+	extract.setInputCloud(scene_filtered);
+	extract.setIndices(inliers);
+	extract.setNegative(true);
+	objects_pointcloud->clear();
+	extract.filter(*objects_pointcloud);
+
+	// Filter z again to make sure we don't get the table edges as points
+	pass.setInputCloud(boost::make_shared < pcl::PointCloud<pcl::PointXYZRGB> > (*objects_pointcloud));
+	pass.setFilterFieldName("z");
+	pass.setFilterLimits(table_height, max_z);	
+	//pass.setFilterLimits(-0.2, max_z);
+	pass.filter(*objects_pointcloud);
+
+//	cout << "Size after = " << objects_pointcloud->points.size() << endl;
+	
+	std::cout << "original cloud has size " << scene_filtered->points.size() << std::endl;
+	std::cout << "passing on objs cloud of size " << objects_pointcloud->points.size() << std::endl;
+	
+	/*objects_pointcloud->height = 1;
+	objects_pointcloud->width = objects_pointcloud->points.size();*/
+}
+
+void Wrapper::clusterPointcloud(PCLPointCloud::Ptr& cloud, std::vector<pcl::PointIndices>& cluster_indices){
+	// KdTree object for the search method of the extraction
+	pcl::search::KdTree<PCLPoint>::Ptr kdtree_cl(new pcl::search::KdTree<PCLPoint>());
+	kdtree_cl->setInputCloud(cloud);
+	pcl::EuclideanClusterExtraction<PCLPoint> ec;
+	ec.setClusterTolerance(clustering_tolerance_);
+	ec.setMinClusterSize(cluster_min_size_);
+	ec.setMaxClusterSize(cluster_max_size_);
+	ec.setSearchMethod(kdtree_cl);
+	ec.setInputCloud(cloud);
+	ec.extract(cluster_indices);
+}
+
+// Computes the object centroid based on the pointcloud
+void Wrapper::computeCentroid(const PCLPointCloud& cloud, Eigen::Vector3f& centroid){
+	Eigen::Vector4f centr;
+	pcl::compute3DCentroid(cloud, centr);
+	centroid[0] = centr[0];
+	centroid[1] = centr[1];
+	centroid[2] = centr[2];
+}
+
+int main(int argc, char** argv){
+	ros::init(argc, argv, "overFeatWrapper");
+	ros::NodeHandle nh;
+	Wrapper overfeat_wrapper (nh);
+	while (ros::ok()) {
+		ros::Duration(0.07).sleep();
+		ros::spinOnce();
+	}
+	
+	ros::spin();
+
+	return 0;
+}
