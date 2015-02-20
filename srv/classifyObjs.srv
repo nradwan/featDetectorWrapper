@@ -1,3 +1,4 @@
-sensor_msgs/PointCloud2[] clusters
+sensor_msgs/PointCloud2[] cloud_clusters
+sensor_msgs/Image[] image_clusters
 ---
 featDetectorWrapper/detectedObjArray detected_classes

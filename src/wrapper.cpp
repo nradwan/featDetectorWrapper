@@ -20,10 +20,10 @@ void Wrapper::init(){
 	detection_topic = "Detection";
 	frame_id = "/camera_depth_optical_frame";
 	obj_detect_topic = "classifyObjs";
-	clustering_tolerance_ = 0.025;
-	cluster_min_size_ =  50;
-  	cluster_max_size_ = 15000;
-  	maximum_obj_size = 100; //(50 cm)
+	clustering_tolerance_ = 0.01;//0.025;
+	cluster_min_size_ =  50;//50;
+  	cluster_max_size_ = 20000;
+  	maximum_obj_size = 100;//100; //(50 cm)
 	
 	//announce the object detection service
 	detect_wrapper_service = node_handle.advertiseService(service_topic, &Wrapper::handleDetectionServiceCall, this);
@@ -89,11 +89,13 @@ void Wrapper::publishDetection(const sensor_msgs::PointCloud2::ConstPtr &msg){
 	//publish the table cloud
 	sensor_msgs::PointCloud2 table_cloud_msg;
 	pcl::toROSMsg(*table_cloud, table_cloud_msg);
+	table_cloud_msg.header.frame_id = frame_id;
 	table_pub.publish(table_cloud_msg);
 	
 	//publish the objs cloud
 	sensor_msgs::PointCloud2 objs_cloud_msg;
 	pcl::toROSMsg(*objs_cloud, objs_cloud_msg);
+	objs_cloud_msg.header.frame_id = frame_id;
 	scene_pub.publish(objs_cloud_msg);
 	
 	// Cluster the objects in the objs_cloud
@@ -106,6 +108,8 @@ void Wrapper::publishDetection(const sensor_msgs::PointCloud2::ConstPtr &msg){
 	std::vector<PCLPointCloud::Ptr> new_clusters; // collect new clusters
 	std::vector<Eigen::Vector3f> new_cluster_centroids; // collect new cluster centroids
 	int id = 0;
+	
+	std::vector<sensor_msgs::Image> cluster_images;
 	
 	for (it = cluster_indices.begin(); it != cluster_indices.end(); ++it) {
 		PCLPointCloud::Ptr single_cluster(new PCLPointCloud);
@@ -140,6 +144,9 @@ void Wrapper::publishDetection(const sensor_msgs::PointCloud2::ConstPtr &msg){
 		curr_obj.color.g = 0.0;
 		curr_obj.color.b = 0.0;
 		detected_centroids.markers.push_back(curr_obj);
+		//crop the pointcloud around the cluster
+		sensor_msgs::Image cropped_cluster = cropCloud(msg, objs_cloud, it->indices);
+		cluster_images.push_back(cropped_cluster);
 		
 		id++;
 	}
@@ -152,12 +159,17 @@ void Wrapper::publishDetection(const sensor_msgs::PointCloud2::ConstPtr &msg){
 	for(std::vector<PCLPointCloud::Ptr>::iterator ix = new_clusters.begin();
 			ix != new_clusters.end(); ++ix){
 		sensor_msgs::PointCloud2 curr_cluster;
+		//sensor_msgs::Image curr_img_cluster;
 		pcl::toROSMsg(**ix, curr_cluster);
-		cluster_clouds.push_back(curr_cluster);		
+		//pcl::toROSMsg(curr_cluster, curr_img_cluster);
+		cluster_clouds.push_back(curr_cluster);
+		//cluster_images.push_back(curr_img_cluster);		
 	}
+	
 	//create the service call
-	featDetectorWrapper::classifyObjs srv;
-	srv.request.clusters = cluster_clouds;
+	/*featDetectorWrapper::classifyObjs srv;
+	srv.request.cloud_clusters = cluster_clouds;
+	srv.request.image_clusters = cluster_images;
 	if(obj_detect_client.call(srv)){
 		ROS_INFO("Object Detection service called");
 		detection_pub.publish(srv.response.detected_classes);
@@ -165,7 +177,7 @@ void Wrapper::publishDetection(const sensor_msgs::PointCloud2::ConstPtr &msg){
 	else{
 		ROS_ERROR("Failure to call the object detection service");
 		return;
-	}
+	}*/
 	return;
 }
 
@@ -173,12 +185,12 @@ void Wrapper::filterPointcloud(const sensor_msgs::PointCloud2::ConstPtr& origina
 // Filtering purposes. Remove points with z > max_z
 	double max_z = 0.9 + 0.5;
 	double min_x = 0.01;// Aachen
-	double max_x = 0.65;  
+	double max_x = 1.0;//0.65;  
 	double min_y = 0.01;// Aachen
 	double max_y = 1.5;
 	//remove all points with z < table_height
-	double table_height = -0.03; // landmark
-	double plane_thresh = 0.03;
+	double table_height = 0.05;//-0.03; // landmark
+	double plane_thresh = 0.01;//0.03;
 
 
 	//////////////////////////// Filter to reduce the resolution of the cloud ////////////////////////////
@@ -227,23 +239,23 @@ void Wrapper::filterPointcloud(const sensor_msgs::PointCloud2::ConstPtr& origina
 	//pass.setFilterLimits(-0.2, max_z);
 	pass.filter(*scene_filtered);
 
-//  ROS_WARN("size after z clipping = %u", scene_filtered->points.size());
+	//ROS_WARN("size after z clipping = %u", scene_filtered->points.size());
 	
-  	pass.setInputCloud(boost::make_shared < pcl::PointCloud<pcl::PointXYZRGB> > (*scene_filtered));
+  	/*pass.setInputCloud(boost::make_shared < pcl::PointCloud<pcl::PointXYZRGB> > (*scene_filtered));
 	pass.setFilterFieldName("x");
 	pass.setFilterLimits(min_x, max_x);	
 	pass.filter(*scene_filtered);
 
-//  ROS_WARN("size after x clipping = %u", scene_filtered->points.size());
+	//ROS_WARN("size after x clipping = %u", scene_filtered->points.size());
 
   	pass.setInputCloud(boost::make_shared < pcl::PointCloud<pcl::PointXYZRGB> > (*scene_filtered));
 	pass.setFilterFieldName("y");
 	pass.setFilterLimits(min_y, max_y);	
 	pass.filter(*scene_filtered);
+	*/
 
 
-
-//  ROS_WARN("size after y clipping = %u", scene_filtered->points.size());
+	//ROS_WARN("size after y clipping = %u", scene_filtered->points.size());
 
 	if (scene_filtered->empty()) {
 		ROS_WARN("No points left after filtering by distance.");
@@ -319,6 +331,174 @@ void Wrapper::computeCentroid(const PCLPointCloud& cloud, Eigen::Vector3f& centr
 	centroid[0] = centr[0];
 	centroid[1] = centr[1];
 	centroid[2] = centr[2];
+}
+//crops the original pointcloud around the cluster
+sensor_msgs::Image Wrapper::cropCloud(sensor_msgs::PointCloud2::ConstPtr original_cloud, pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_filtered, std::vector<int> cluster_indices){
+
+	static int counter = 0;
+
+	//convert the original cloud to pcl
+	pcl::PCLPointCloud2 tmp_cloud;
+	pcl_conversions::toPCL(*original_cloud, tmp_cloud);
+	pcl::PointCloud<pcl::PointXYZRGB> pcl_cloud;
+	pcl::fromPCLPointCloud2(tmp_cloud, pcl_cloud);
+	
+	//initialize bounds
+	double min_x = std::numeric_limits<double>::infinity();
+	pcl::PointXYZRGB min_x_pt;
+	double min_y = std::numeric_limits<double>::infinity();
+	pcl::PointXYZRGB min_y_pt;
+	double max_x = -1 * std::numeric_limits<double>::infinity();
+	pcl::PointXYZRGB max_x_pt;
+	double max_y = -1 * std::numeric_limits<double>::infinity();
+	pcl::PointXYZRGB max_y_pt;
+	//get the min max cluster indices
+	for(std::vector<int>::const_iterator c_it = cluster_indices.begin(); c_it != cluster_indices.end(); ++c_it){
+		double curr_x = cloud_filtered->points[*c_it].x;
+		double curr_y = cloud_filtered->points[*c_it].y;
+		//std::cout << curr_x << "," << curr_y << std::endl;
+		//std::cout << "curr: " << curr_x << ", " << curr_y << std::endl;
+		if(curr_x < min_x){
+			min_x = curr_x;
+			min_x_pt = cloud_filtered->points[*c_it];
+		}		
+		if(curr_x > max_x){
+			max_x = curr_x;
+			max_x_pt = cloud_filtered->points[*c_it];
+		}
+		if(curr_y < min_y){
+			min_y = curr_y;
+			min_y_pt = cloud_filtered->points[*c_it];
+		}
+		if(curr_y > max_y){
+			max_y = curr_y;
+			max_y_pt = cloud_filtered->points[*c_it];
+		}
+	}
+	
+	
+	
+	//loop over the original pointcloud
+	double cropping_threshold = 0.001;
+	min_x = -1 * std::numeric_limits<double>::infinity();
+	min_y = -1 * std::numeric_limits<double>::infinity();
+	max_x = std::numeric_limits<double>::infinity();
+	max_y = std::numeric_limits<double>::infinity();
+	int min_x_r, min_x_c, max_x_r, max_x_c;
+	int min_y_r, min_y_c, max_y_r, max_y_c; 
+	for(int row = 0; row < pcl_cloud.height; row++){
+		for(int col = 0; col < pcl_cloud.width; col++){
+			
+			pcl::PointXYZRGB curr_pt = pcl_cloud.at(col, row);
+			
+			//check for min_x
+			if(curr_pt.x >= (min_x_pt.x - cropping_threshold) && curr_pt.x <= (min_x_pt.x)){
+				if(curr_pt.x >= min_x){
+					min_x = curr_pt.x;
+					min_x_r = row;
+					min_x_c = col;
+				}
+			}
+			//check for min_y
+			if(curr_pt.y >= (min_y_pt.y - cropping_threshold) && curr_pt.y <= (min_y_pt.y)){
+				if(curr_pt.y >= min_y){
+					min_y = curr_pt.y;
+					min_y_r = row;
+					min_y_c = col;
+				}
+			}
+			//check for max_x
+			if(curr_pt.x >= (max_x_pt.x) && curr_pt.x <= (max_x_pt.x + cropping_threshold)){
+				if(curr_pt.x <= max_x){
+					max_x = curr_pt.x;
+					max_x_r = row;
+					max_x_c = col;
+				}
+			}
+			//check for max_y
+			if(curr_pt.y >= (max_y_pt.y) && curr_pt.y <= (max_y_pt.y + cropping_threshold)){
+				if(curr_pt.y <= max_y){
+					max_y = curr_pt.y;
+					max_y_r = row;
+					max_y_c = col;
+				}
+			}
+		}
+	}
+	
+	/*std::cout << "min_x: " << min_x_r << "," << min_x_c << std::endl;
+	std::cout << "min_y: " << min_y_r << "," << min_y_c << std::endl;
+	std::cout << "max_x: " << max_x_r << "," << max_x_c << std::endl;
+	std::cout << "max_y: " << max_y_r << "," << max_y_c << std::endl;*/
+	
+	int start_r = min_y_r;
+	int start_c = min_x_c;
+	int end_r = max_y_r;
+	int end_c = max_x_c;
+	std::cout << "start pose: " << start_r << "," << start_c << std::endl;
+	std::cout << "end pose: " << end_r << "," << end_c << std::endl;
+	int width = end_r - start_r + 1;
+	int height = end_c - start_c + 1;
+	
+	sensor_msgs::Image original_image;
+	pcl::toROSMsg(*original_cloud, original_image);
+	cv_bridge::CvImagePtr cv_ptr;
+	try{
+		cv_ptr = cv_bridge::toCvCopy(original_image, sensor_msgs::image_encodings::BGR8);
+	}
+	catch(cv_bridge::Exception& e){
+		ROS_ERROR("cv_bridge exception: %s", e.what());
+	}
+	
+	if(width > 0 && height > 0){
+		//draw a rectangle around the image for the found cluster
+		cv::Mat edited_image(cv_ptr->image);
+		cv::rectangle(edited_image, cv::Point(start_c, start_r), cv::Point(end_c, end_r), cv::Scalar(255, 0, 0), 2);
+		//cv::rectangle(edited_image, cv::Point(min_x_c, min_x_r), cv::Point(max_x_c, max_x_r), cv::Scalar(0, 0, 255), 2);
+		//cv::rectangle(edited_image, cv::Point(min_y_c, min_y_r), cv::Point(max_y_c, max_y_r), cv::Scalar(0, 255, 0), 2);
+		std::stringstream ss;
+		ss << "/home/radwann/foundClusters/im_";
+		ss << counter;
+		ss << ".jpeg";
+		cv::imwrite(ss.str(), edited_image);
+	}
+	
+	//cv::Mat cv_im(cv_ptr->image, cv::Rect(start_r, start_c, width, height));
+	//cv::namedWindow("Display Window", cv::WINDOW_AUTOSIZE);
+	//cv::imshow("Display Window", cv_im);
+	//cv::waitKey(0);
+	//sensor_msgs::ImagePtr result_image = cv_bridge::CvImage(std_msgs::Header(), "bgr8", cv_im).toImageMsg();
+	//create new point cloud for the resulting image
+	/*pcl::PointCloud<pcl::PointXYZRGB> cropped_cloud;
+	cropped_cloud.width = width;
+	cropped_cloud.height = height;
+	for(int ic = start_c; ic <= end_c; ic++){
+		for(int ir = start_r; ir <= end_r; ir++){
+			//std::cout << pcl_cloud.points[ir + ic * pcl_cloud.height] << std::endl;
+			cropped_cloud.points.push_back(pcl_cloud.points[ir + ic * pcl_cloud.height]);
+		}
+	}
+	//convert the pointcloud to sensor_msgs Image
+	sensor_msgs::Image result_image;
+	sensor_msgs::PointCloud2 tmp_res;
+	pcl::toROSMsg(cropped_cloud, tmp_res);
+	pcl::toROSMsg(tmp_res, result_image);
+	
+	//debugging: visualization
+	cv_bridge::CvImagePtr cv_ptr;
+	try{
+		cv_ptr = cv_bridge::toCvCopy(result_image, sensor_msgs::image_encodings::BGR8);
+		cv::namedWindow("Original Window", cv::WINDOW_AUTOSIZE);
+		cv::imshow("Original Window", cv_ptr->image);
+		cv::waitKey(0);
+	}
+	catch(cv_bridge::Exception& e){
+		ROS_ERROR("cv_bridge exception: %s", e.what());
+	}*/
+	
+	counter++;
+	return original_image;
+	//return *result_image;
 }
 
 int main(int argc, char** argv){

@@ -2,6 +2,9 @@
 #define __WRAPPER_H_INCLUDED__
 
 #include <iostream>
+#include <limits>
+#include <algorithm>
+#include <sstream>
 
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl/ModelCoefficients.h>
@@ -26,6 +29,12 @@
 #include <visualization_msgs/MarkerArray.h>
 
 #include <Eigen/Core>
+
+#include <image_transport/image_transport.h>
+#include <cv_bridge/cv_bridge.h>
+#include <sensor_msgs/image_encodings.h>
+#include <opencv2/imgproc/imgproc.hpp>
+#include <opencv2/highgui/highgui.hpp>
 
 #include "featDetectorWrapper/objDetection.h"
 #include "featDetectorWrapper/detectedObjArray.h"
@@ -68,6 +77,7 @@ class Wrapper{
 		void filterPointcloud(const sensor_msgs::PointCloud2::ConstPtr& original_pc, PCLPointCloud::Ptr& objects_pointcloud, PCLPointCloud::Ptr& table_pointcloud);
 		void clusterPointcloud(PCLPointCloud::Ptr& cloud, std::vector<pcl::PointIndices>& cluster_indices);
 		void computeCentroid(const PCLPointCloud& cloud, Eigen::Vector3f& centroid);
+		sensor_msgs::Image cropCloud(sensor_msgs::PointCloud2::ConstPtr original_cloud, PCLPointCloud::Ptr cloud_filtered, std::vector<int> cluster_indices);
 		
 	public:
 		Wrapper(ros::NodeHandle nh);

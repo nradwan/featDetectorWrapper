@@ -11,7 +11,11 @@ find_package(catkin REQUIRED COMPONENTS
   sensor_msgs
   message_generation
   cmake_modules
+  OpenCV
+  cv_bridge 
+  image_transport
 )
+find_package(OpenCV REQUIRED)
 find_package(PCL REQUIRED)
 find_package(Eigen REQUIRED)
 
@@ -106,7 +110,7 @@ generate_messages(
 catkin_package(
   INCLUDE_DIRS include
   LIBRARIES featDetectorWrapper
-  CATKIN_DEPENDS roscpp rospy std_msgs message_runtime sensor_msgs
+  CATKIN_DEPENDS roscpp rospy std_msgs message_runtime sensor_msgs opencv2 cv_bridge image_transport
   DEPENDS system_lib
 )
 
@@ -121,6 +125,7 @@ include_directories(
   ${catkin_INCLUDE_DIRS}
 )
 include_directories(${PCL_INCLUDE_DIRS})
+include_directories(${OpenCV_INCLUDE_DIRS})
 
 ## Declare a cpp library
 # add_library(featDetectorWrapper
@@ -139,7 +144,7 @@ add_executable(Wrapper src/wrapper.cpp)
 # target_link_libraries(featDetectorWrapper_node
 #   ${catkin_LIBRARIES}
 # )
-target_link_libraries(Wrapper ${catkin_LIBRARIES} ${PCL_LIBRARIES})
+target_link_libraries(Wrapper ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBRARIES})
 add_dependencies(Wrapper featDetectorWrapper_gencpp)
 
 #############
