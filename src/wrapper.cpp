@@ -145,8 +145,10 @@ void Wrapper::publishDetection(const sensor_msgs::PointCloud2::ConstPtr &msg){
 		curr_obj.color.b = 0.0;
 		detected_centroids.markers.push_back(curr_obj);
 		//crop the pointcloud around the cluster
-		//sensor_msgs::Image cropped_cluster = cropCloud(msg, objs_cloud, it->indices);
-		//cluster_images.push_back(cropped_cluster);
+		//cv::Point circle_ctr(new_centr(0), new_centr(1));
+		//sensor_msgs::Image cropped_cluster = cropCloud(msg, objs_cloud, it->indices, circle_ctr);
+		sensor_msgs::Image cropped_cluster = cropCloud2(*single_cluster, msg);
+		cluster_images.push_back(cropped_cluster);
 		
 		id++;
 	}
@@ -183,13 +185,13 @@ void Wrapper::publishDetection(const sensor_msgs::PointCloud2::ConstPtr &msg){
 
 void Wrapper::filterPointcloud(const sensor_msgs::PointCloud2::ConstPtr& original_pc, PCLPointCloud::Ptr& objects_pointcloud, PCLPointCloud::Ptr& table_pointcloud){
 // Filtering purposes. Remove points with z > max_z
-	double max_z = 2.0;//0.9 + 0.5;
+	double max_z = 2.5;//0.9 + 0.5;
 	double min_x = 0.01;// Aachen
 	double max_x = 0.65;//1.0;//0.65;  
-	double min_y = 0.01;// Aachen
-	double max_y = 1.5;
+	double min_y = -0.05;//0.01;// Aachen
+	double max_y = 2.0;//1.5;
 	//remove all points with z < table_height
-	double table_height = -0.05;//0.05;//-0.03; // landmark
+	double table_height = -0.5;//0.05;//-0.03; // landmark
 	double plane_thresh = 0.01;//0.03;
 
 
@@ -333,7 +335,7 @@ void Wrapper::computeCentroid(const PCLPointCloud& cloud, Eigen::Vector3f& centr
 	centroid[2] = centr[2];
 }
 //crops the original pointcloud around the cluster
-sensor_msgs::Image Wrapper::cropCloud(sensor_msgs::PointCloud2::ConstPtr original_cloud, pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_filtered, std::vector<int> cluster_indices){
+sensor_msgs::Image Wrapper::cropCloud(sensor_msgs::PointCloud2::ConstPtr original_cloud, pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_filtered, std::vector<int> cluster_indices, cv::Point circle_centr){
 
 	static int counter = 0;
 
@@ -380,10 +382,10 @@ sensor_msgs::Image Wrapper::cropCloud(sensor_msgs::PointCloud2::ConstPtr origina
 	
 	//loop over the original pointcloud
 	double cropping_threshold = 0.001;
-	min_x = -1 * std::numeric_limits<double>::infinity();
-	min_y = -1 * std::numeric_limits<double>::infinity();
-	max_x = std::numeric_limits<double>::infinity();
-	max_y = std::numeric_limits<double>::infinity();
+	min_x = 1 * std::numeric_limits<double>::infinity();
+	min_y = 1 * std::numeric_limits<double>::infinity();
+	max_x = -1 * std::numeric_limits<double>::infinity();
+	max_y = -1 * std::numeric_limits<double>::infinity();
 	int min_x_r, min_x_c, max_x_r, max_x_c;
 	int min_y_r, min_y_c, max_y_r, max_y_c; 
 	for(int row = 0; row < pcl_cloud.height; row++){
@@ -393,7 +395,7 @@ sensor_msgs::Image Wrapper::cropCloud(sensor_msgs::PointCloud2::ConstPtr origina
 			
 			//check for min_x
 			if(curr_pt.x >= (min_x_pt.x - cropping_threshold) && curr_pt.x <= (min_x_pt.x)){
-				if(curr_pt.x >= min_x){
+				if(curr_pt.x <= min_x){
 					min_x = curr_pt.x;
 					min_x_r = row;
 					min_x_c = col;
@@ -401,7 +403,7 @@ sensor_msgs::Image Wrapper::cropCloud(sensor_msgs::PointCloud2::ConstPtr origina
 			}
 			//check for min_y
 			if(curr_pt.y >= (min_y_pt.y - cropping_threshold) && curr_pt.y <= (min_y_pt.y)){
-				if(curr_pt.y >= min_y){
+				if(curr_pt.y <= min_y){
 					min_y = curr_pt.y;
 					min_y_r = row;
 					min_y_c = col;
@@ -409,7 +411,7 @@ sensor_msgs::Image Wrapper::cropCloud(sensor_msgs::PointCloud2::ConstPtr origina
 			}
 			//check for max_x
 			if(curr_pt.x >= (max_x_pt.x) && curr_pt.x <= (max_x_pt.x + cropping_threshold)){
-				if(curr_pt.x <= max_x){
+				if(curr_pt.x >= max_x){
 					max_x = curr_pt.x;
 					max_x_r = row;
 					max_x_c = col;
@@ -417,7 +419,7 @@ sensor_msgs::Image Wrapper::cropCloud(sensor_msgs::PointCloud2::ConstPtr origina
 			}
 			//check for max_y
 			if(curr_pt.y >= (max_y_pt.y) && curr_pt.y <= (max_y_pt.y + cropping_threshold)){
-				if(curr_pt.y <= max_y){
+				if(curr_pt.y >= max_y){
 					max_y = curr_pt.y;
 					max_y_r = row;
 					max_y_c = col;
@@ -435,8 +437,8 @@ sensor_msgs::Image Wrapper::cropCloud(sensor_msgs::PointCloud2::ConstPtr origina
 	int start_c = min_x_c;
 	int end_r = max_y_r;
 	int end_c = max_x_c;
-	std::cout << "start pose: " << start_r << "," << start_c << std::endl;
-	std::cout << "end pose: " << end_r << "," << end_c << std::endl;
+	//std::cout << "start pose: " << start_r << "," << start_c << std::endl;
+	//std::cout << "end pose: " << end_r << "," << end_c << std::endl;
 	int width = end_r - start_r + 1;
 	int height = end_c - start_c + 1;
 	
@@ -453,11 +455,12 @@ sensor_msgs::Image Wrapper::cropCloud(sensor_msgs::PointCloud2::ConstPtr origina
 	if(width > 0 && height > 0){
 		//draw a rectangle around the image for the found cluster
 		cv::Mat edited_image(cv_ptr->image);
+		//cv::circle(edited_image, circle_centr, 5, cv::Scalar(0, 255, 0), 2);
 		cv::rectangle(edited_image, cv::Point(start_c, start_r), cv::Point(end_c, end_r), cv::Scalar(255, 0, 0), 2);
 		//cv::rectangle(edited_image, cv::Point(min_x_c, min_x_r), cv::Point(max_x_c, max_x_r), cv::Scalar(0, 0, 255), 2);
 		//cv::rectangle(edited_image, cv::Point(min_y_c, min_y_r), cv::Point(max_y_c, max_y_r), cv::Scalar(0, 255, 0), 2);
 		std::stringstream ss;
-		ss << "/home/radwann/foundClusters/im_";
+		ss << "/home/noha/Documents/Hiwi/foundClusters/im_";
 		ss << counter;
 		ss << ".jpeg";
 		cv::imwrite(ss.str(), edited_image);
@@ -500,6 +503,77 @@ sensor_msgs::Image Wrapper::cropCloud(sensor_msgs::PointCloud2::ConstPtr origina
 	return original_image;
 	//return *result_image;
 }
+
+sensor_msgs::Image Wrapper::cropCloud2(pcl::PointCloud<pcl::PointXYZRGB> cluster_cloud, sensor_msgs::PointCloud2::ConstPtr original_msg){
+	static int counter = 0;
+	//compute the bounding box of the cluster 
+	pcl::PointXYZRGB min_pt, max_pt;
+	pcl::getMinMax3D(cluster_cloud, min_pt, max_pt);
+	
+	//convert the original msg to pcl
+	pcl::PCLPointCloud2 tmp_cloud;
+	pcl_conversions::toPCL(*original_msg, tmp_cloud);
+	PCLPointCloud original_cloud;
+	pcl::fromPCLPointCloud2(tmp_cloud, original_cloud);
+	
+	//use the P matrix: P: [[525.0, 0.0, 319.5, 0.0], [0.0, 525.0, 239.5, 0.0], [0.0, 0.0, 1.0, 0.0]]
+	// and the projection formula to compute the pixel coordinates of the min max points
+	// then take the row and col before them
+	
+	double fx = 525.0;
+	double fy = 525.0;
+	double cx = 319.5;
+	double cy = 239.5;
+	
+	sensor_msgs::Image original_image;
+	pcl::toROSMsg(*original_msg, original_image);
+	
+	if(min_pt.z == 0.0 || pcl_isnan(min_pt.z) || max_pt.z == 0.0 || pcl_isnan(max_pt.z)){
+		ROS_ERROR("min/max point has bad coordinates");
+		return original_image;
+	}
+	int min_pt_r = (min_pt.x / min_pt.z) * fx + cx;
+	int min_pt_c = (min_pt.y / min_pt.z) * fy + cy;
+	int max_pt_r = (max_pt.x / max_pt.z) * fx + cx;
+	int max_pt_c = (max_pt.y / max_pt.z) * fx + cx;
+	
+	/*cv::Point start_pt (min_pt_c, max_pt_r);
+	cv::Point end_pt (max_pt_c, min_pt_r);
+	std::cout << "start pt coordinates: " << min_pt_c << "," << max_pt_r << std::endl;
+	std::cout << "end pt coordinates: " << max_pt_c << "," << min_pt_r << std::endl;*/
+	
+	
+	cv_bridge::CvImagePtr cv_ptr;
+	try{
+		cv_ptr = cv_bridge::toCvCopy(original_image, sensor_msgs::image_encodings::BGR8);
+	}
+	catch(cv_bridge::Exception& e){
+		ROS_ERROR("cv_bridge exception: %s", e.what());
+	}
+	cv::Mat edited_image (cv_ptr->image);
+	cv::Point start_pt (std::max(std::min(min_pt_r, max_pt_r) - 1, 0), std::max(std::min(min_pt_c, max_pt_c) - 1, 0));
+	cv::Point end_pt (std::min(std::max(max_pt_r, min_pt_r) + 1, (int)original_cloud.height), std::min(std::max(max_pt_c, min_pt_c) + 1, (int)original_cloud.width));
+	cv::rectangle(edited_image, start_pt, end_pt, cv::Scalar(255, 0, 0), 2);
+	
+	if(start_pt.x > end_pt.x || start_pt.y > end_pt.x){
+		ROS_ERROR("zero width/height error");
+		return original_image;
+	}
+	
+	//crop image and convert to sensor_msgs::Image
+	cv::Mat cv_im(cv_ptr->image, cv::Rect(start_pt, end_pt));
+	//write image to file
+	std::stringstream ss;
+	ss << "/home/noha/Documents/Hiwi/foundClusters/im_";
+	ss << counter;
+	ss << ".jpeg";
+	cv::imwrite(ss.str(), cv_im);
+	counter++;
+	sensor_msgs::ImagePtr result_image = cv_bridge::CvImage(std_msgs::Header(), "bgr8", cv_im).toImageMsg();
+
+	return *result_image;
+}
+
 
 int main(int argc, char** argv){
 	ros::init(argc, argv, "overFeatWrapper");

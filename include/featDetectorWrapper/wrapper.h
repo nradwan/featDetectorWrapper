@@ -21,7 +21,8 @@
 #include <pcl/features/normal_3d.h>
 #include <pcl/kdtree/kdtree.h>
 #include <pcl/segmentation/extract_clusters.h>
-
+#include <pcl/common/impl/common.hpp>
+#include <pcl/pcl_macros.h>
 
 #include "ros/ros.h"
 #include "sensor_msgs/PointCloud2.h"
@@ -77,7 +78,8 @@ class Wrapper{
 		void filterPointcloud(const sensor_msgs::PointCloud2::ConstPtr& original_pc, PCLPointCloud::Ptr& objects_pointcloud, PCLPointCloud::Ptr& table_pointcloud);
 		void clusterPointcloud(PCLPointCloud::Ptr& cloud, std::vector<pcl::PointIndices>& cluster_indices);
 		void computeCentroid(const PCLPointCloud& cloud, Eigen::Vector3f& centroid);
-		sensor_msgs::Image cropCloud(sensor_msgs::PointCloud2::ConstPtr original_cloud, PCLPointCloud::Ptr cloud_filtered, std::vector<int> cluster_indices);
+		sensor_msgs::Image cropCloud(sensor_msgs::PointCloud2::ConstPtr original_cloud, PCLPointCloud::Ptr cloud_filtered, std::vector<int> cluster_indices, cv::Point circle_centr);
+		sensor_msgs::Image cropCloud2(pcl::PointCloud<pcl::PointXYZRGB> cluster_cloud, sensor_msgs::PointCloud2::ConstPtr original_cloud);
 		
 	public:
 		Wrapper(ros::NodeHandle nh);
