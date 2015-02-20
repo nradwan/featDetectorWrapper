@@ -20,10 +20,10 @@ void Wrapper::init(){
 	detection_topic = "Detection";
 	frame_id = "/camera_depth_optical_frame";
 	obj_detect_topic = "classifyObjs";
-	clustering_tolerance_ = 0.01;//0.025;
+	clustering_tolerance_ = 0.025;//0.025;
 	cluster_min_size_ =  50;//50;
-  	cluster_max_size_ = 20000;
-  	maximum_obj_size = 100;//100; //(50 cm)
+  	cluster_max_size_ = 15000;
+  	maximum_obj_size = 50;//100; //(50 cm)
 	
 	//announce the object detection service
 	detect_wrapper_service = node_handle.advertiseService(service_topic, &Wrapper::handleDetectionServiceCall, this);
@@ -145,8 +145,8 @@ void Wrapper::publishDetection(const sensor_msgs::PointCloud2::ConstPtr &msg){
 		curr_obj.color.b = 0.0;
 		detected_centroids.markers.push_back(curr_obj);
 		//crop the pointcloud around the cluster
-		sensor_msgs::Image cropped_cluster = cropCloud(msg, objs_cloud, it->indices);
-		cluster_images.push_back(cropped_cluster);
+		//sensor_msgs::Image cropped_cluster = cropCloud(msg, objs_cloud, it->indices);
+		//cluster_images.push_back(cropped_cluster);
 		
 		id++;
 	}
@@ -183,13 +183,13 @@ void Wrapper::publishDetection(const sensor_msgs::PointCloud2::ConstPtr &msg){
 
 void Wrapper::filterPointcloud(const sensor_msgs::PointCloud2::ConstPtr& original_pc, PCLPointCloud::Ptr& objects_pointcloud, PCLPointCloud::Ptr& table_pointcloud){
 // Filtering purposes. Remove points with z > max_z
-	double max_z = 0.9 + 0.5;
+	double max_z = 2.0;//0.9 + 0.5;
 	double min_x = 0.01;// Aachen
-	double max_x = 1.0;//0.65;  
+	double max_x = 0.65;//1.0;//0.65;  
 	double min_y = 0.01;// Aachen
 	double max_y = 1.5;
 	//remove all points with z < table_height
-	double table_height = 0.05;//-0.03; // landmark
+	double table_height = -0.05;//0.05;//-0.03; // landmark
 	double plane_thresh = 0.01;//0.03;
 
 
