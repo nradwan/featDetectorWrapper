@@ -145,9 +145,8 @@ void Wrapper::publishDetection(const sensor_msgs::PointCloud2::ConstPtr &msg){
 		curr_obj.color.b = 0.0;
 		detected_centroids.markers.push_back(curr_obj);
 		//crop the pointcloud around the cluster
-		//cv::Point circle_ctr(new_centr(0), new_centr(1));
-		//sensor_msgs::Image cropped_cluster = cropCloud(msg, objs_cloud, it->indices, circle_ctr);
-		sensor_msgs::Image cropped_cluster = cropCloud2(*single_cluster, msg);
+		sensor_msgs::Image cropped_cluster = cropCloud(msg, objs_cloud, it->indices);
+		//sensor_msgs::Image cropped_cluster = cropCloud2(*single_cluster, msg);
 		cluster_images.push_back(cropped_cluster);
 		
 		id++;
@@ -335,7 +334,7 @@ void Wrapper::computeCentroid(const PCLPointCloud& cloud, Eigen::Vector3f& centr
 	centroid[2] = centr[2];
 }
 //crops the original pointcloud around the cluster
-sensor_msgs::Image Wrapper::cropCloud(sensor_msgs::PointCloud2::ConstPtr original_cloud, pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_filtered, std::vector<int> cluster_indices, cv::Point circle_centr){
+sensor_msgs::Image Wrapper::cropCloud(sensor_msgs::PointCloud2::ConstPtr original_cloud, pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_filtered, std::vector<int> cluster_indices){
 
 	static int counter = 0;
 
@@ -452,52 +451,24 @@ sensor_msgs::Image Wrapper::cropCloud(sensor_msgs::PointCloud2::ConstPtr origina
 		ROS_ERROR("cv_bridge exception: %s", e.what());
 	}
 	
+	sensor_msgs::ImagePtr result_image;
+	
 	if(width > 0 && height > 0){
 		//draw a rectangle around the image for the found cluster
 		cv::Mat edited_image(cv_ptr->image);
-		//cv::circle(edited_image, circle_centr, 5, cv::Scalar(0, 255, 0), 2);
 		cv::rectangle(edited_image, cv::Point(start_c, start_r), cv::Point(end_c, end_r), cv::Scalar(255, 0, 0), 2);
 		//cv::rectangle(edited_image, cv::Point(min_x_c, min_x_r), cv::Point(max_x_c, max_x_r), cv::Scalar(0, 0, 255), 2);
 		//cv::rectangle(edited_image, cv::Point(min_y_c, min_y_r), cv::Point(max_y_c, max_y_r), cv::Scalar(0, 255, 0), 2);
+		//crop image and convert to sensor_msgs::Image
+		cv::Mat cv_im(cv_ptr->image, cv::Rect(cv::Point(start_c, start_r), cv::Point(end_c, end_r)));
 		std::stringstream ss;
 		ss << "/home/noha/Documents/Hiwi/foundClusters/im_";
 		ss << counter;
 		ss << ".jpeg";
-		cv::imwrite(ss.str(), edited_image);
+		cv::imwrite(ss.str(), cv_im);
+		result_image = cv_bridge::CvImage(std_msgs::Header(), "bgr8", cv_im).toImageMsg();
+		return *result_image;
 	}
-	
-	//cv::Mat cv_im(cv_ptr->image, cv::Rect(start_r, start_c, width, height));
-	//cv::namedWindow("Display Window", cv::WINDOW_AUTOSIZE);
-	//cv::imshow("Display Window", cv_im);
-	//cv::waitKey(0);
-	//sensor_msgs::ImagePtr result_image = cv_bridge::CvImage(std_msgs::Header(), "bgr8", cv_im).toImageMsg();
-	//create new point cloud for the resulting image
-	/*pcl::PointCloud<pcl::PointXYZRGB> cropped_cloud;
-	cropped_cloud.width = width;
-	cropped_cloud.height = height;
-	for(int ic = start_c; ic <= end_c; ic++){
-		for(int ir = start_r; ir <= end_r; ir++){
-			//std::cout << pcl_cloud.points[ir + ic * pcl_cloud.height] << std::endl;
-			cropped_cloud.points.push_back(pcl_cloud.points[ir + ic * pcl_cloud.height]);
-		}
-	}
-	//convert the pointcloud to sensor_msgs Image
-	sensor_msgs::Image result_image;
-	sensor_msgs::PointCloud2 tmp_res;
-	pcl::toROSMsg(cropped_cloud, tmp_res);
-	pcl::toROSMsg(tmp_res, result_image);
-	
-	//debugging: visualization
-	cv_bridge::CvImagePtr cv_ptr;
-	try{
-		cv_ptr = cv_bridge::toCvCopy(result_image, sensor_msgs::image_encodings::BGR8);
-		cv::namedWindow("Original Window", cv::WINDOW_AUTOSIZE);
-		cv::imshow("Original Window", cv_ptr->image);
-		cv::waitKey(0);
-	}
-	catch(cv_bridge::Exception& e){
-		ROS_ERROR("cv_bridge exception: %s", e.what());
-	}*/
 	
 	counter++;
 	return original_image;
